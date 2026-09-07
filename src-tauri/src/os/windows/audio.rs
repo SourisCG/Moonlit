@@ -180,6 +180,14 @@ fn push_mic_quantum(shared: &Arc<SharedAudio>, f: &[f32], ch: u16, rate: u32) {
     let muted = shared.mute_mic.load(Ordering::Relaxed);
     SharedAudio::push_stem(&shared.mic_ring, shared.capacity, &convert(f, ch, rate, pct, muted));
 }
+/// Friendly name for logs (which physical device backs each stream).
+fn device_label(d: &Option<cpal::Device>) -> String {
+    d.as_ref()
+        .and_then(|dev| dev.name().ok())
+        .filter(|n| !n.trim().is_empty())
+        .unwrap_or_else(|| "<none>".into())
+}
+
 /// Owned capture session. Dropping it stops both streams (cpal `Stream`
 /// stops on drop) and unregisters the shared state.
 pub struct AudioCapture {
@@ -210,6 +218,10 @@ impl AudioCapture {
         ));
         // Game: render endpoint opened as INPUT = WASAPI loopback.
         let game_device = super::devices::find_output_device(desktop_id);
+        // Mic: capture endpoint.
+        let mic_device = super::devices::find_input_device(mic_id);
+        eprintln!("[moonlit] audio devices: game='{}' mic='{}'",
+            device_label(&game_device), device_label(&mic_device));
         let game_stream = match game_device {
             Some(d) => match start_loopback_stream(&d, shared.clone()) {
                 Ok(s) => {
@@ -227,7 +239,6 @@ impl AudioCapture {
             }
         };
         // Mic: capture endpoint.
-        let mic_device = super::devices::find_input_device(mic_id);
         let mic_stream = match mic_device {
             Some(d) => match start_mic_stream(&d, shared.clone()) {
                 Ok(s) => {

@@ -195,9 +195,15 @@ fn mix_stems(game: &[f32], mic: &[f32]) -> Vec<f32> {
 }
 
 /// Minimal PCM-16 WAV writer (stereo 48 kHz). No extra crate needed.
+/// Batched through a 1 MB BufWriter: per-sample syscalls made this stage
+/// cost 7 s for 3×30 s stems (8.6M writes); now a handful of block writes.
 fn write_wav(path: &Path, samples: &[f32]) -> std::io::Result<()> {
-    let mut f = std::fs::File::create(path)?;
-    let data_bytes = (samples.len() * 2) as u32;
+    use std::io::{BufWriter, Write};
+    let mut pcm = Vec::with_capacity(samples.len() * 2);
+    for &s in samples {
+        pcm.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+    }
+    let data_bytes = pcm.len() as u32;
     let mut hdr = [0u8; 44];
     hdr[0..4].copy_from_slice(b"RIFF");
     hdr[4..8].copy_from_slice(&(36 + data_bytes).to_le_bytes());
@@ -212,11 +218,11 @@ fn write_wav(path: &Path, samples: &[f32]) -> std::io::Result<()> {
     hdr[34..36].copy_from_slice(&16u16.to_le_bytes());
     hdr[36..40].copy_from_slice(b"data");
     hdr[40..44].copy_from_slice(&data_bytes.to_le_bytes());
-    f.write_all(&hdr)?;
-    for &s in samples {
-        let v = ((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes();
-        f.write_all(&v)?;
-    }
+    let f = std::fs::File::create(path)?;
+    let mut w = BufWriter::with_capacity(1024 * 1024, f);
+    w.write_all(&hdr)?;
+    w.write_all(&pcm)?;
+    w.flush()?;
     Ok(())
 }
 
@@ -870,6 +876,26 @@ mod tests {
         // Shorter side decides; tails share the "now" edge.
         assert_eq!(mix_stems(&[1.0, 2.0, 3.0], &[10.0]), vec![11.0]);
         assert!(mix_stems(&[], &[1.0]).is_empty());
+    }
+
+    #[test]
+    fn wav_exact_size_and_clamp() {
+        use super::write_wav;
+        let dir = std::env::temp_dir().join(format!("moonlit-wav-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("t.wav");
+        // 1 s stereo + out-of-range clamp check.
+        let mut samples = vec![0.0f32; 48_000 * 2];
+        samples[0] = 2.0;
+        samples[1] = -2.0;
+        write_wav(&p, &samples).unwrap();
+        let bytes = std::fs::read(&p).unwrap();
+        assert_eq!(bytes.len(), 44 + 48_000 * 2 * 2);
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[36..40], b"data");
+        assert_eq!(i16::from_le_bytes([bytes[44], bytes[45]]), 32767);
+        assert_eq!(i16::from_le_bytes([bytes[46], bytes[47]]), -32767);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
