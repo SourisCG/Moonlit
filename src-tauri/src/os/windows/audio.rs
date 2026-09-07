@@ -37,6 +37,11 @@ pub struct AudioSnapshot {
 pub struct SharedAudio {
     game_ring: Mutex<Vec<f32>>,
     mic_ring: Mutex<Vec<f32>>,
+    /// Lock-free peak meters (f32 bits of max |sample| seen). Updated in the
+    /// hot callbacks; read at save for the dBFS stats line. Answers "is the
+    /// device delivering signal?" without locks or extra threads.
+    game_peak: AtomicU32,
+    mic_peak: AtomicU32,
     /// Max stem samples kept (set from the buffer length at start).
     capacity: usize,
     game_pct: AtomicU32,
@@ -52,6 +57,8 @@ impl SharedAudio {
         Self {
             game_ring: Mutex::new(Vec::new()),
             mic_ring: Mutex::new(Vec::new()),
+            game_peak: AtomicU32::new(0.0f32.to_bits()),
+            mic_peak: AtomicU32::new(0.0f32.to_bits()),
             capacity: ((capacity_secs as usize) * STEM_RATE as usize) * STEM_CHANNELS,
             game_pct: AtomicU32::new(game_pct.min(200)),
             mic_pct: AtomicU32::new(mic_pct.min(200)),
@@ -88,6 +95,24 @@ impl SharedAudio {
         AudioSnapshot {
             game: self.game_ring.lock().map(|g| g.clone()).unwrap_or_default(),
             mic: self.mic_ring.lock().map(|g| g.clone()).unwrap_or_default(),
+        }
+    }
+
+    /// Peak levels (linear 0.0–1.0+) seen since start: (game, mic).
+    /// 0.0 = digital silence from the device (nothing captured, or muted).
+    pub fn peak_levels(&self) -> (f32, f32) {
+        (
+            f32::from_bits(self.game_peak.load(Ordering::Relaxed)),
+            f32::from_bits(self.mic_peak.load(Ordering::Relaxed)),
+        )
+    }
+
+    /// Fold one quantum's peak into the lock-free meter. f32 bits of
+    /// non-negative values order like u32, so fetch_max is exact.
+    fn note_peak(meter: &AtomicU32, samples: &[f32]) {
+        let peak = samples.iter().fold(0.0f32, |a, &s| a.max(s.abs()));
+        if peak > 0.0 {
+            meter.fetch_max(peak.to_bits(), Ordering::Relaxed);
         }
     }
 }
@@ -168,17 +193,24 @@ fn to_stereo_48k(samples: &[f32], in_channels: u16, in_rate: u32) -> Vec<f32> {
 }
 
 /// Push one game quantum (gained stem).
+/// Push one game quantum (gained stem). Peaks meter the CONVERTED stem —
+/// what actually lands in the ring and the file.
 fn push_game_quantum(shared: &Arc<SharedAudio>, f: &[f32], ch: u16, rate: u32) {
     let pct = shared.game_pct.load(Ordering::Relaxed);
     let muted = shared.mute_game.load(Ordering::Relaxed);
-    SharedAudio::push_stem(&shared.game_ring, shared.capacity, &convert(f, ch, rate, pct, muted));
+    let stem = convert(f, ch, rate, pct, muted);
+    SharedAudio::note_peak(&shared.game_peak, &stem);
+    SharedAudio::push_stem(&shared.game_ring, shared.capacity, &stem);
 }
 
-/// Push one mic quantum (gained stem).
+/// Push one mic quantum (gained stem). Peaks meter the CONVERTED stem —
+/// what actually lands in the ring and the file.
 fn push_mic_quantum(shared: &Arc<SharedAudio>, f: &[f32], ch: u16, rate: u32) {
     let pct = shared.mic_pct.load(Ordering::Relaxed);
     let muted = shared.mute_mic.load(Ordering::Relaxed);
-    SharedAudio::push_stem(&shared.mic_ring, shared.capacity, &convert(f, ch, rate, pct, muted));
+    let stem = convert(f, ch, rate, pct, muted);
+    SharedAudio::note_peak(&shared.mic_peak, &stem);
+    SharedAudio::push_stem(&shared.mic_ring, shared.capacity, &stem);
 }
 /// Friendly name for logs (which physical device backs each stream).
 fn device_label(d: &Option<cpal::Device>) -> String {
@@ -275,6 +307,11 @@ impl AudioCapture {
     pub fn live_count(&self) -> usize {
         self.shared.live_count()
     }
+
+    /// Peak levels (linear) seen since start: (game, mic).
+    pub fn peak_levels(&self) -> (f32, f32) {
+        self.shared.peak_levels()
+    }
 }
 
 impl Drop for AudioCapture {
@@ -295,6 +332,8 @@ fn start_loopback_stream(device: &cpal::Device, shared: Arc<SharedAudio>) -> Res
     let config = device
         .default_output_config()
         .map_err(|e| format!("loopback config: {e}"))?;
+    eprintln!("[moonlit] game format: {} Hz, {} ch, {:?}",
+        config.sample_rate().0, config.channels(), config.sample_format());
     let stream_config = cpal::StreamConfig {
         channels: config.channels(),
         sample_rate: config.sample_rate(),
@@ -335,6 +374,8 @@ fn start_mic_stream(device: &cpal::Device, shared: Arc<SharedAudio>) -> Result<c
     let config = device
         .default_input_config()
         .map_err(|e| format!("mic config: {e}"))?;
+    eprintln!("[moonlit] mic format: {} Hz, {} ch, {:?}",
+        config.sample_rate().0, config.channels(), config.sample_format());
     let stream_config = cpal::StreamConfig {
         channels: config.channels(),
         sample_rate: config.sample_rate(),
@@ -440,6 +481,22 @@ mod tests {
     }
 
     #[test]
+    fn peak_meter_tracks_max() {
+        use super::{push_game_quantum, push_mic_quantum, SharedAudio};
+        use std::sync::Arc;
+        let s = Arc::new(SharedAudio::new(10, 100, 100, false, false));
+        assert_eq!(s.peak_levels(), (0.0, 0.0));
+        push_game_quantum(&s, &[0.1, -0.2, 0.05, 0.0], 2, STEM_RATE);
+        push_mic_quantum(&s, &[0.0; 4], 2, STEM_RATE);
+        let (g, m) = s.peak_levels();
+        assert!((g - 0.2).abs() < 1e-6, "{g}");
+        assert_eq!(m, 0.0);
+        // Meters never go down within a session.
+        push_game_quantum(&s, &[0.01; 2], 2, STEM_RATE);
+        assert!((s.peak_levels().0 - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
     fn ring_trims() {
         let s = SharedAudio::new(1, 100, 100, false, false);
         let cap = s.capacity;
@@ -452,6 +509,7 @@ mod tests {
     /// Live hardware test (ignored by default — needs real WASAPI devices,
     /// so it never runs on headless CI). Run explicitly:
     /// `cargo test --target x86_64-pc-windows-msvc live_ -- --ignored`.
+    /// Make noise while it runs: it logs both stems' peaks.
     #[tokio::test]
     #[ignore]
     async fn live_streams_link() {
@@ -463,6 +521,8 @@ mod tests {
         let snap = cap.snapshot();
         let total = snap.game.len() + snap.mic.len();
         assert!(total > 0, "rings stayed empty after 2 s");
+        let (g, m) = cap.peak_levels();
+        eprintln!("[moonlit-test] live peaks: game={g:.4} mic={m:.4}");
     }
 
     /// Regression test for the stock-install failure: the GSR magic ids

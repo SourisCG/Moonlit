@@ -185,6 +185,14 @@ fn cut_ts_window(ring: &[u8], keep_bytes: usize) -> &[u8] {
     win
 }
 
+/// dBFS for the save stats line (-inf when the stem is digital silence).
+fn dbfs(v: f32) -> String {
+    if v <= 0.0 {
+        "-inf".to_string()
+    } else {
+        format!("{:.1}dB", 20.0 * v.log10())
+    }
+}
 /// MIX track from the two solo tails. Both stems share the 48 kHz stereo
 /// grid and both tails end at "now", so equal-length tails are sample
 /// aligned and sum to a true mix (Linux parity: mix plays everywhere).
@@ -699,6 +707,13 @@ impl CaptureEngine for WindowsCaptureEngine {
         eprintln!("[moonlit] save: wgc_in={fin} pump_out={fout} ring={}MB dead={}",
             rlen / 1024 / 1024,
             self.video_dead.load(Ordering::Relaxed));
+        // Audio levels: peaks seen since start, per stem. A -inf stem means
+        // the device delivered digital silence (muted, wrong endpoint, or
+        // no signal) — not a mux problem.
+        if let Some(a) = self.audio.as_ref() {
+            let (g, m) = a.peak_levels();
+            eprintln!("[moonlit] audio stats: game peak={} mic peak={}", dbfs(g), dbfs(m));
+        }
         // Video window: last (duration + 2 s) of TS, resynced.
         let keep = ((self.bitrate_kbps as usize * (self.duration_secs as usize + 2)) / 8) * 1024;
         let cut = {
