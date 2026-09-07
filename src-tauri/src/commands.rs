@@ -359,7 +359,10 @@ pub async fn engine_status(app: AppHandle) -> Result<EngineStatus, String> {
 }
 
 /// Full save pipeline: flush ring -> thumbnail -> DB index -> ding -> event.
+/// Stage timings go to the backend log (`[moonlit] save ...`) so slow saves
+/// can be attributed instead of guessed.
 pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> {
+    let t_total = std::time::Instant::now();
     let path = {
         let st = app.state::<AppState>();
         let mut guard = st.recorder.lock().await;
@@ -368,6 +371,7 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
             .ok_or_else(|| "buffer not running".to_string())?;
         eng.save_clip().await?
     };
+    let t_engine = t_total.elapsed();
     let db = app.state::<DbState>();
     // Same-second double saves collide: GSR names files by timestamp, so the
     // second file overwrites the first on disk and the DB rejects the duplicate.
@@ -455,11 +459,6 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
         .await
         .map_err(|e| format!("cannot stat clip: {e}"))?
         .len() as i64;
-    // Real measured duration (the buffer is rarely full at save time).
-    // Falls back to the configured length only if probing fails.
-    let secs_ms = crate::editor::ffmpeg::probe_duration_ms(&ffmpeg, &path)
-        .await
-        .unwrap_or_else(|| buffer_seconds(&db) * 1000);
     let stem = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -470,11 +469,30 @@ pub(crate) async fn do_save_clip(app: &AppHandle) -> Result<ClipRecord, String> 
         .ok_or("bad clip file name")?
         .to_string();
     let thumb_name = format!("thumb_{stem}.jpg");
-    // Adaptive seek: 1 s into normal clips, mid-file for sub-second ones
-    // (a fixed 1 s seek lands past EOF and fails the thumbnail).
-    let seek = ((secs_ms as f32 / 2000.0).min(1.0)).max(0.05);
-    crate::editor::ffmpeg::make_thumbnail(&ffmpeg, &path, &base.join(&thumb_name), seek).await?;
+    let thumb_path = base.join(&thumb_name);
+    // Duration probe + thumbnail are independent (same input): run them
+    // together instead of paying two cold ffmpeg spawns in series.
+    // Thumbnail tries 1 s first; a sub-second clip retries near the head.
+    let t_tail = std::time::Instant::now();
+    let (probe_ms, thumb_res) = tokio::join!(
+        crate::editor::ffmpeg::probe_duration_ms(&ffmpeg, &path),
+        crate::editor::ffmpeg::make_thumbnail(&ffmpeg, &path, &thumb_path, 1.0),
+    );
+    // Real measured duration (the buffer is rarely full at save time).
+    // Falls back to the configured length only if probing fails.
+    let secs_ms = probe_ms.unwrap_or_else(|| buffer_seconds(&db) * 1000);
+    if let Err(e) = thumb_res {
+        if secs_ms < 1500 {
+            crate::editor::ffmpeg::make_thumbnail(&ffmpeg, &path, &thumb_path, 0.05).await?;
+        } else {
+            return Err(e);
+        }
+    }
+    let t_tail_elapsed = t_tail.elapsed();
+    let t_db = std::time::Instant::now();
     let clip = db.insert_clip(&file_name, &thumb_name, "Unknown", secs_ms, size)?;
+    eprintln!("[moonlit] save total={:?} engine={t_engine:?} probe+thumb={t_tail_elapsed:?} db={:?} size={}MB",
+        t_total.elapsed(), t_db.elapsed(), size / 1024 / 1024);
     crate::cue::play_ding();
     let _ = app.emit("moonlit://clip-saved", &clip);
     Ok(clip)

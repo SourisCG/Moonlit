@@ -461,6 +461,7 @@ impl WindowsCaptureEngine {
         let _ = tokio::fs::remove_file(&tmp).await;
         // Full-length placeholder: a missing stem must not shorten the clip
         // through -shortest (apad covers the partial case below).
+        let t_wav = std::time::Instant::now();
         let silence = vec![0.0f32; full_secs.max(1) * 48_000 * 2];
         let stems = [
             ("mix", if mix.is_empty() { &silence } else { mix }),
@@ -480,6 +481,8 @@ impl WindowsCaptureEngine {
             .map_err(|e| format!("cannot write {name} wav: {e}"))?;
             wav_paths.push(p);
         }
+        let t_mux = std::time::Instant::now();
+        let wav_elapsed = t_mux.duration_since(t_wav);
         let status = Command::new(ffmpeg)
             .args(["-y", "-hide_banner", "-loglevel", "error"])
             .arg("-i")
@@ -511,6 +514,7 @@ impl WindowsCaptureEngine {
         if !status.success() {
             return Err("save mux failed (ffmpeg)".into());
         }
+        eprintln!("[moonlit] mux: wav={wav_elapsed:?} mux={:?}", t_mux.elapsed());
         Ok(())
     }
 }
@@ -670,14 +674,14 @@ impl CaptureEngine for WindowsCaptureEngine {
     async fn save_clip(&mut self) -> Result<PathBuf, String> {
         if self.control.is_none() {
             return Err("recorder not running".into());
-        }
-        if self.video_dead.load(Ordering::Relaxed) {
+        }        if self.video_dead.load(Ordering::Relaxed) {
             let len = self.video_ring.lock().map(|r| r.len()).unwrap_or(0);
             if len == 0 {
                 return Err("video encoder died and no footage is buffered".into());
             }
         }
         let ffmpeg = self.ffmpeg.clone();
+        let t_save = std::time::Instant::now();
         // Telemetry: frames WGC delivered vs frames the pump wrote, plus
         // ring fill. A stalled source shows in>>out==0; a dead encoder
         // shows video_dead with a frozen ring.
@@ -734,6 +738,7 @@ impl CaptureEngine for WindowsCaptureEngine {
         .await;
         let _ = tokio::fs::remove_file(&ts_path).await;
         res?;
+        eprintln!("[moonlit] wgc-save done in {:?}", t_save.elapsed());
         Ok(dest)
     }
 

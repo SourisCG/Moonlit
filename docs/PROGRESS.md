@@ -92,6 +92,13 @@ Applies from Phase 3 on (capture, detection, editor/FFmpeg, packaging).
   derived at save from aligned solo tails (live mix-ring interleaved chunks
   — removed), e2e asserts probed duration ∈ [4,8] s for a 6 s run, save
   logs pump telemetry, mic-privacy note in `09`.
+- **Slow-save investigation (2026-09-07): F9→ding took 30 s+.** Found the
+  dev disk (C:) at **477 MB free** with a 29 GB `target/` — disk pressure
+  alone stalls every stage (80 MB TS + WAVs + 75 MB clip + AV scans).
+  `cargo clean` reclaimed it (26.5 GB free). Shipped with the same commit:
+  per-stage timing logs (`save total/engine/probe+thumb/db`, `mux wav/mux`,
+  `wgc-save`) and parallel probe+thumbnail (`join!`, 1 s seek with near-head
+  retry for sub-second clips). Next F9 prints exactly where seconds go.
 
 - **Phase 0/1** — Scaffold, tray minimize-to-tray, F9 global shortcut with notification, MoonLit glass layout, pausable canvas starfield, ES/EN i18n. Manual test: F9 counted globally, tray restore OK.
 - **Phase 1-fixes** — Frameless window + custom topbar (drag, minimize, maximize, close-to-tray), MoonLit moon+play CSS logo from moonlit.souriscg.dev, time-based soft starfield twinkle, Rust 400ms + frontend 300ms F9 dedupe. Manual test passed by user.
