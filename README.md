@@ -34,7 +34,7 @@ Many popular clipping tools are closed-source, tied to their cloud, and resource
 | Replay buffer | Sometimes | **Yes, RAM ring, no disk writes until save** |
 | Audio tracks | Usually single mixed track | **3-track: MIX (game+mic) + game solo + mic solo** |
 | Editor | Cloud / heavy | **Lightweight local: lossless trim, vertical 9:16, remix** |
-| Sharing | Locked to vendor cloud link | **Your Drive (public link (optional) + clipboard) + Discord / YouTube / etc.** |
+| Sharing | Locked to vendor cloud link | **Your Drive (public link + clipboard (optional)) + Discord / YouTube / etc.** |
 | Open source | Usually not | **Yes, GPL-3.0-only** |
 | Languages | Usually EN only | **ES + EN from day one** |
 
