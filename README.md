@@ -1,7 +1,7 @@
 # MoonLit
 
 > Open-source, lightweight, local-first game clip recorder for Linux and Windows.
-> A Medal.tv-style alternative with zero cloud: press a hotkey, save the last seconds, edit lightly, share from your own storage.
+> Inspired by the idea of instant replay: press a hotkey, save the last seconds, edit lightly, share from your own storage.
 
 [![License: GPL-3.0-only](https://img.shields.io/badge/License-GPL--3.0--only-blue.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-lightgrey.svg)](https://github.com/SourisCG/Moonlit)
@@ -15,28 +15,28 @@ Website: [moonlit.souriscg.dev](https://moonlit.souriscg.dev/) · Full spec: [`S
 
 ## Why MoonLit?
 
-Clipping epic moments shouldn't require a heavy client, a cloud account, or Windows-only software.
+Clipping epic moments shouldn't require a heavy client, a cloud account, or a single-OS app.
 
-Medal.tv is great, but it's closed, cloud-locked, heavy (300-800 MB Electron), and has no real Linux story. **MoonLit does one thing well:** capture what just happened while you game, with almost zero cost, and leave the files with you.
+Many popular clipping tools are closed-source, tied to their cloud, and resource-heavy, with limited support on Linux. **MoonLit takes a different approach:** capture what just happened while you game, with almost zero cost, and keep the files with you.
 
 - **Press `F9` while playing** — get an `.mp4` of the last seconds in <1s.
 - **Keep playing** — capture lives in GPU/VRAM + RAM ring, React UI stays hidden in tray.
 - **Own your clips** — local files + SQLite + OS keyring. No central server. Share via *your* Google Drive or webhooks.
 
-## Medal.tv vs MoonLit
+## How MoonLit is different
 
-|  | Medal.tv | MoonLit |
+|  | Typical closed recorders | MoonLit |
 |---|---|---|
-| Cloud required | Yes, account + upload | **No. Zero-cloud, local-first** |
-| Linux support | No | **Yes (X11 + Wayland via gpu-screen-recorder)** |
+| Cloud required | Often yes, account + upload | **No. Zero-cloud, local-first** |
+| Linux support | Rare / limited | **Yes (X11 + Wayland via gpu-screen-recorder)** |
 | Windows support | Yes | Yes (Windows 10 1903+ / 11, WGC, in progress) |
-| Idle footprint while gaming | ~300-800 MB (Electron/Chromium) | **<80 MB RAM, ~0% CPU, window hidden to tray** |
-| Replay buffer | Yes | **Yes, RAM ring, no disk writes until save** |
-| Audio tracks | Mixed | **3-track: MIX (game+mic) + game solo + mic solo** |
+| Idle footprint while gaming | Often heavy (bundled Chromium/Electron) | **<80 MB RAM, ~0% CPU, window hidden to tray** |
+| Replay buffer | Sometimes | **Yes, RAM ring, no disk writes until save** |
+| Audio tracks | Usually single mixed track | **3-track: MIX (game+mic) + game solo + mic solo** |
 | Editor | Cloud / heavy | **Lightweight local: lossless trim, vertical 9:16, remix** |
-| Sharing | Medal cloud link | **Your Drive (public link + clipboard) + Discord / YouTube / etc.** |
-| Open source | No | **Yes, GPL-3.0-only** |
-| Languages | EN | **ES + EN from day one** |
+| Sharing | Locked to vendor cloud link | **Your Drive (public link + clipboard) + Discord / YouTube / etc.** |
+| Open source | Usually not | **Yes, GPL-3.0-only** |
+| Languages | Usually EN only | **ES + EN from day one** |
 
 ## Features
 
@@ -44,7 +44,7 @@ Medal.tv is great, but it's closed, cloud-locked, heavy (300-800 MB Electron), a
 
 - **Replay buffer with global hotkey** — `F9` saves last N seconds (default 30s) via embedded `gpu-screen-recorder`, `SIGUSR1` flush, no re-encode.
 - **Mix-first 3-track audio** — Track 1 = game+mic mix (plays everywhere), Track 2 = game only, Track 3 = mic only for editing. Live per-track gain/mute (0-200%) without touching what you hear.
-- **Medal-grade quality** — Medal CBR ladder (360p/720p/1080p/1440p) + old-MoonLit NVENC HQ recipe (`p7/hq/high/bf=2`), 30/60fps selector, monitor selector.
+- **High-quality presets** — CBR ladder (360p/720p/1080p/1440p) + NVENC HQ tuning (`p7/hq/high/bf=2`), 30/60fps selector, monitor selector.
 - **Smart delivery** — records at source when needed, downscales on save with `lanczos` for crisp text at non-integer ratios.
 - **Gallery** — thumbnails + real durations, favorites, ghost-clip reconcile (auto-purge missing files), LRU prune.
 - **Safe persistence** — SQLite with relative paths only (`base_dir + file_name`), secrets in OS keyring, never absolute paths in DB.
